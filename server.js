@@ -1,6 +1,7 @@
 const dotenv = require('dotenv')
 const express = require('express')
 const connectDB = require('./config/db')
+const errorHandler = require('./middleware/errorMiddleware')
 const authRoutes = require('./routes/authRoutes')
 
 dotenv.config()
@@ -13,9 +14,8 @@ app.use(express.json())
 
 app.use('/api/auth', authRoutes)
 
-app.get('/', (req, res) => {
-	res.send('Hello')
-})
+//Error Handler (should be last piece of middleware)
+app.use(errorHandler)
 
 const PORT = process.env.PORT || 5000
 
