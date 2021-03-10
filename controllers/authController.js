@@ -1,6 +1,9 @@
+const crypto = require('crypto')
 const User = require('../models/UserModel')
 const ErrorResponse = require('../utils/errorResponse')
+const sendEmail = require('../utils/sendEmail')
 
+// @desc Register user
 const register = async (req, res, next) => {
 	const { username, email, password } = req.body
 	try {
@@ -16,14 +19,17 @@ const register = async (req, res, next) => {
 	}
 }
 
+// @desc Login user
 const login = async (req, res, next) => {
 	const { email, password } = req.body
 
+	// Check if email and password is provided
 	if (!email || !password) {
 		return next(new ErrorResponse('Please provide Email and Password', 400))
 	}
 
 	try {
+		// Check that user exists by email
 		const user = await User.findOne({ email }).select('+password')
 
 		if (!user) {
@@ -32,6 +38,7 @@ const login = async (req, res, next) => {
 
 		const isMatch = await user.matchPasswords(password)
 
+		// Check that password match
 		if (!isMatch) {
 			return next(new ErrorResponse('Invalid Credentials', 401))
 		}
@@ -42,12 +49,94 @@ const login = async (req, res, next) => {
 	}
 }
 
-const forgotPassword = (req, res, next) => {
-	res.send('forgotPassword')
+// @desc Forgot Password Initialization
+const forgotPassword = async (req, res, next) => {
+	// Send Email to the email provided but first check if user exists
+	const { email } = req.body
+
+	try {
+		const user = await User.findOne({ email })
+
+		if (!user) {
+			return next(new ErrorResponse('Email could not be sent', 404))
+		}
+
+		// get reset token
+		// Reset Token Generate and add to database hashed (private) version of token
+		const resetToken = user.getResetPasswordToken()
+
+		//save the newly modified resetPasswordToken field in userSchema to DB
+		await user.save()
+
+		// Create reset url to email to provided email
+		const resetUrl = `http://localhost:3000/passwordreset/${resetToken}`
+
+		// HTML Message
+		const message = `
+	<h1>You have requested a password reset</h1>
+	<p>Please make a put request to the following link:</p>
+	<a href=${resetUrl} clicktracking=off>${resetUrl}</a>`
+
+		try {
+			await sendEmail({
+				to: user.email,
+				subject: 'Password Reset Request',
+				text: message,
+			})
+
+			res.status(200).json({ success: true, data: 'Email Sent' })
+		} catch (err) {
+			console.log(err)
+
+			user.resetPasswordToken = undefined
+			user.resetPasswordExpire = undefined
+
+			await user.save()
+
+			return next(new ErrorResponse('Email could not be sent', 500))
+		}
+	} catch (err) {
+		next(err)
+	}
 }
 
-const resetPassword = (req, res, next) => {
-	res.send('resetPassword')
+const resetPassword = async (req, res, next) => {
+	// Get Hashed Token
+	// Compare token in URL params to hashed token
+	const resetPasswordToken = crypto
+		.createHash('sha256')
+		.update(req.params.resetToken)
+		.digest('hex')
+
+	try {
+		const user = await User.findOne({
+			resetPasswordToken,
+			//if date greater than current date, the reset token is valid
+			resetPasswordExpire: { $gt: Date.now() },
+		})
+
+		if (!user) {
+			return next(new ErrorResponse('Invalid Reset token', 400))
+		}
+
+		// set password
+		user.password = req.body.password
+		// after resetting make undefined so that these below two fields is not saved in DB
+		// and we dont wont the user to use this token again to reset
+		user.resetPasswordToken = undefined
+		user.resetPasswordExpire = undefined
+
+		//resave password and hash it
+		await user.save()
+
+		res.status(201).json({
+			success: true,
+			data: 'Password Updated Success',
+			token: user.getSignedToken(),
+		})
+	} catch (err) {
+		next(err)
+	}
 }
 
 const sendToken = (user, statusCode, res) => {
